@@ -259,7 +259,7 @@ async function postToInstagram(page, filePath, caption) {
      }
   }
 
-  await page.waitForTimeout(8000);
+  await page.waitForTimeout(25000); // Give Instagram 25 seconds to finish uploading
   console.log(`[✅] Instagram post shared!`);
 }
 
