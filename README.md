@@ -65,12 +65,14 @@ CREATE TABLE social_cookies (
 Supabase has a strict security feature called RLS. If it got turned on, your database is effectively "invisible" to Railway, even though you can see the data in your dashboard.
 Go to your Supabase SQL Editor.
 Paste and run this exact command to forcefully drop the security shield for this table:
-ALTER TABLE social_cookies DISABLE ROW LEVEL SECURITY;
 
+```sql
+ALTER TABLE social_cookies DISABLE ROW LEVEL SECURITY;
+```
 The bot needs your browser cookies to post without triggering login screens or 2FA checks.
-```
+
+
 Install the EditThisCookie Chrome extension.
-```
 
 Step 2: Extracting Your Cookies
 Open an Incognito/Private window and log into the social media account you want to automate (e.g., instagram.com).
