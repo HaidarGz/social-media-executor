@@ -251,11 +251,11 @@ async function postToInstagram(page, filePath, caption) {
 
   const shareBtn = page.locator('button').filter({ hasText: /^Share$/i }).last();
   if (await shareBtn.isVisible({ timeout: 5000 }).catch(()=>false)) {
-     await shareBtn.click();
+     await shareBtn.click({ force: true });
   } else {
      const shareDiv = page.locator('div[role="button"]').filter({ hasText: /^Share$/i }).last();
      if(await shareDiv.isVisible({ timeout: 1000 }).catch(()=>false)){
-         await shareDiv.click();
+         await shareDiv.click({ force: true });
      }
   }
 
