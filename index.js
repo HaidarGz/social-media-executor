@@ -176,7 +176,7 @@ app.post('/publish', async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// INSTAGRAM (100% UNTOUCHED)
+// INSTAGRAM (FIXED SHARE BUTTON LOGIC)
 // ════════════════════════════════════════════════════════════════════════════
 async function postToInstagram(page, filePath, caption) {
   console.log(`[+] Opening Instagram...`);
@@ -249,15 +249,14 @@ async function postToInstagram(page, filePath, caption) {
   }
   await page.waitForTimeout(1000);
 
-  const shareBtn = page.locator('button').filter({ hasText: /^Share$/i }).last();
-  if (await shareBtn.isVisible({ timeout: 5000 }).catch(()=>false)) {
-     await shareBtn.click({ force: true });
-  } else {
-     const shareDiv = page.locator('div[role="button"]').filter({ hasText: /^Share$/i }).last();
-     if(await shareDiv.isVisible({ timeout: 1000 }).catch(()=>false)){
-         await shareDiv.click({ force: true });
-     }
-  }
+  console.log(`[+] Forcing Share button click via JavaScript evaluate...`);
+  await page.evaluate(() => {
+      const elements = Array.from(document.querySelectorAll('button, div[role="button"]'));
+      const shareButtons = elements.filter(el => el.textContent && el.textContent.trim() === 'Share');
+      if (shareButtons.length > 0) {
+          shareButtons[shareButtons.length - 1].click();
+      }
+  });
 
   await page.waitForTimeout(25000); // Give Instagram 25 seconds to finish uploading
   console.log(`[✅] Instagram post shared!`);
