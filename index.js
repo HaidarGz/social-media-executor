@@ -26,7 +26,6 @@ const upload = multer({ storage });
 app.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file received' });
   
-  // ✅ RAILWAY FIX 1: Use dynamic host instead of hardcoded Hostinger IP
   const url = `${req.protocol}://${req.get('host')}/files/${req.file.filename}`;
   
   console.log(`[+] Image uploaded: ${url}`);
@@ -75,20 +74,40 @@ app.post('/publish', async (req, res) => {
   let tempFilePath = null;
 
   try {
+    // 🔥 BULLETPROOF DATABASE FETCH 🔥
+    // Fetch all rows to bypass Supabase's strict invisible-character matching
     const { data, error } = await supabase
       .from('social_cookies')
-      .select('cookie_json')
-      .eq('friend_name', friend_name)
-      .eq('platform', platform)
-      .single();
+      .select('*');
 
-    if (error || !data) {
-      console.error('[-] Cookie fetch failed:', error);
-      return res.status(404).json({ error: `No cookies found for ${friend_name} on ${platform}` });
+    if (error) {
+      console.error('[-] Database connection failed:', error);
+      return res.status(500).json({ error: 'Database connection failed', details: error.message });
     }
 
-    const cookies = cleanCookies(data.cookie_json);
+    if (!data || data.length === 0) {
+      return res.status(404).json({ error: 'The social_cookies table is completely empty.' });
+    }
+
+    // Force match using JavaScript: strips hidden spaces and ignores capital letters
+    const matchedRow = data.find(row => 
+      row.friend_name && row.friend_name.trim().toLowerCase() === friend_name.trim().toLowerCase() &&
+      row.platform && row.platform.trim().toLowerCase() === platform.trim().toLowerCase()
+    );
+
+    if (!matchedRow) {
+      // If it still fails, spit out EXACTLY what the DB contains so you can see the issue in n8n
+      const namesInDb = data.map(r => `'${r.friend_name}'`).join(', ');
+      return res.status(404).json({ 
+        error: `No match found for '${friend_name}' on '${platform}'.`,
+        db_actually_contains: namesInDb
+      });
+    }
+
+    const cookies = cleanCookies(matchedRow.cookie_json);
     console.log(`[+] Cookies loaded for ${friend_name}`);
+
+    // 🔥 END BULLETPROOF FETCH 🔥
 
     if (media_url) {
       const ext = media_url.includes('.mp4') ? '.mp4' : '.jpg';
@@ -97,7 +116,6 @@ app.post('/publish', async (req, res) => {
       await downloadFile(media_url, tempFilePath);
       console.log(`[+] Media saved to ${tempFilePath}`);
 
-      // 🎥 CONVERT TO 15-SEC VIDEO WITH RANDOM MUSIC FOR TIKTOK ONLY
       if (platform === 'tiktok' && ext === '.jpg') {
         console.log(`[+] Converting JPG to a 15-second MP4 video for TikTok...`);
         const videoPath = tempFilePath.replace('.jpg', '.mp4');
@@ -134,7 +152,6 @@ app.post('/publish', async (req, res) => {
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
-    // 🚨 PLAYWRIGHT CLIPBOARD PERMISSIONS
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       viewport: { width: 1280, height: 900 },
@@ -144,7 +161,6 @@ app.post('/publish', async (req, res) => {
     await context.addCookies(cookies);
     const page = await context.newPage();
 
-    // 🔥 PLATFORM ROUTER 🔥
     if (platform === 'instagram') {
       await postToInstagram(page, tempFilePath, content);
     } else if (platform === 'tiktok') {
@@ -175,9 +191,6 @@ app.post('/publish', async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// INSTAGRAM (FIXED SHARE BUTTON LOGIC)
-// ════════════════════════════════════════════════════════════════════════════
 async function postToInstagram(page, filePath, caption) {
   console.log(`[+] Opening Instagram...`);
   await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded' });
@@ -258,13 +271,10 @@ async function postToInstagram(page, filePath, caption) {
       }
   });
 
-  await page.waitForTimeout(25000); // Give Instagram 25 seconds to finish uploading
+  await page.waitForTimeout(25000); 
   console.log(`[✅] Instagram post shared!`);
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// TIKTOK (100% UNTOUCHED)
-// ════════════════════════════════════════════════════════════════════════════
 async function postToTikTok(page, filePath, caption) {
   console.log(`[+] Opening TikTok upload page...`);
   await page.goto('https://www.tiktok.com/creator-center/upload', { waitUntil: 'domcontentloaded' });
@@ -348,9 +358,6 @@ async function postToTikTok(page, filePath, caption) {
   console.log(`[✅] TikTok post process complete!`);
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// THREADS (100% UNTOUCHED)
-// ════════════════════════════════════════════════════════════════════════════
 async function postToThreads(page, filePath, caption) {
   await page.goto('https://www.threads.net/', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(6000);
@@ -420,9 +427,6 @@ async function postToThreads(page, filePath, caption) {
   await page.waitForTimeout(15000);
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// X (TWITTER) (100% UNTOUCHED)
-// ════════════════════════════════════════════════════════════════════════════
 async function postToX(page, filePath, caption) {
   await page.goto('https://x.com/compose/tweet', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(5000);
@@ -475,7 +479,6 @@ async function postToX(page, filePath, caption) {
   await page.waitForTimeout(15000);
 }
 
-// ✅ RAILWAY FIX 2: Listen on 0.0.0.0 so Railway can route traffic to it
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Stealth API running on port ${PORT}`);
