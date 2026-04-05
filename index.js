@@ -12,7 +12,7 @@ const { execSync } = require('child_process');
 const app = express();
 app.use(express.json());
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const supabase = createClient((process.env.SUPABASE_URL || '').trim(), (process.env.SUPABASE_ANON_KEY || '').trim());
 
 // ─── Serve uploaded files publicly ──────────────────────────────────────────
 app.use('/files', express.static(path.join(__dirname, 'tmp')));
