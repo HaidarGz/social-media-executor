@@ -1,9 +1,7 @@
 require('dotenv').config();
-const dns = require('dns');
-dns.setDefaultResultOrder('ipv4first'); // Forces IPv4 to destroy the Railway 'fetch failed' bug
-
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
+const fetch = require('cross-fetch'); // 🔥 THE LIFESAVER: Fixes Docker networking bugs
 const { chromium } = require('playwright');
 const https = require('https');
 const http = require('http');
@@ -15,7 +13,12 @@ const { execSync } = require('child_process');
 const app = express();
 app.use(express.json());
 
-const supabase = createClient((process.env.SUPABASE_URL || '').trim(), (process.env.SUPABASE_ANON_KEY || '').trim());
+// 🔥 BYPASS NODE'S BROKEN DOCKER FETCH 🔥
+const supabase = createClient(
+  (process.env.SUPABASE_URL || '').trim(), 
+  (process.env.SUPABASE_ANON_KEY || '').trim(),
+  { global: { fetch } } // Forces Supabase to use cross-fetch instead of native undici
+);
 
 // ─── Serve uploaded files publicly ──────────────────────────────────────────
 app.use('/files', express.static(path.join(__dirname, 'tmp')));
@@ -28,9 +31,7 @@ const upload = multer({ storage });
 
 app.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file received' });
-  
   const url = `${req.protocol}://${req.get('host')}/files/${req.file.filename}`;
-  
   console.log(`[+] Image uploaded: ${url}`);
   res.json({ url });
 });
@@ -77,8 +78,6 @@ app.post('/publish', async (req, res) => {
   let tempFilePath = null;
 
   try {
-    // 🔥 BULLETPROOF DATABASE FETCH 🔥
-    // Fetch all rows to bypass Supabase's strict invisible-character matching
     const { data, error } = await supabase
       .from('social_cookies')
       .select('*');
@@ -92,14 +91,12 @@ app.post('/publish', async (req, res) => {
       return res.status(404).json({ error: 'The social_cookies table is completely empty.' });
     }
 
-    // Force match using JavaScript: strips hidden spaces and ignores capital letters
     const matchedRow = data.find(row => 
       row.friend_name && row.friend_name.trim().toLowerCase() === friend_name.trim().toLowerCase() &&
       row.platform && row.platform.trim().toLowerCase() === platform.trim().toLowerCase()
     );
 
     if (!matchedRow) {
-      // If it still fails, spit out EXACTLY what the DB contains so you can see the issue in n8n
       const namesInDb = data.map(r => `'${r.friend_name}'`).join(', ');
       return res.status(404).json({ 
         error: `No match found for '${friend_name}' on '${platform}'.`,
@@ -109,8 +106,6 @@ app.post('/publish', async (req, res) => {
 
     const cookies = cleanCookies(matchedRow.cookie_json);
     console.log(`[+] Cookies loaded for ${friend_name}`);
-
-    // 🔥 END BULLETPROOF FETCH 🔥
 
     if (media_url) {
       const ext = media_url.includes('.mp4') ? '.mp4' : '.jpg';
@@ -131,20 +126,16 @@ app.post('/publish', async (req, res) => {
             const tracks = fs.readdirSync(musicDir).filter(f => f.endsWith('.mp3'));
             if (tracks.length > 0) {
               const randomTrack = path.join(musicDir, tracks[Math.floor(Math.random() * tracks.length)]);
-              console.log(`[+] Selected background track: ${path.basename(randomTrack)}`);
               audioCommand = `-i "${randomTrack}"`;
               audioMapping = `-c:a aac -b:a 192k -shortest`;
             }
           }
-
           const ffmpegCmd = `ffmpeg -loop 1 -i "${tempFilePath}" ${audioCommand} -c:v libx264 ${audioMapping} -t 15 -pix_fmt yuv420p "${videoPath}"`;
-          
           execSync(ffmpegCmd);
           fs.unlinkSync(tempFilePath); 
           tempFilePath = videoPath;    
           console.log(`[+] Video conversion successful: ${tempFilePath}`);
         } catch (ffmpegErr) {
-          console.error(ffmpegErr);
           throw new Error('Video conversion failed. Is ffmpeg installed on the server?');
         }
       }
@@ -180,14 +171,12 @@ app.post('/publish', async (req, res) => {
 
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
-      console.log(`[+] Temp file deleted`);
     }
 
     console.log(`[✅] Successfully posted to ${platform} for ${friend_name}`);
     res.status(200).json({ success: true, message: `Posted to ${platform} for ${friend_name}` });
 
   } catch (err) {
-    console.error('[-] Error:', err.message);
     if (browser) await browser.close();
     if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     res.status(500).json({ error: 'Automation failed', details: err.message });
@@ -224,7 +213,6 @@ async function postToInstagram(page, filePath, caption) {
 
   await page.waitForTimeout(4000);
 
-  console.log(`[+] Triggering file upload...`);
   try {
     const [fileChooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: 10000 }),
@@ -265,7 +253,6 @@ async function postToInstagram(page, filePath, caption) {
   }
   await page.waitForTimeout(1000);
 
-  console.log(`[+] Forcing Share button click via JavaScript evaluate...`);
   await page.evaluate(() => {
       const elements = Array.from(document.querySelectorAll('button, div[role="button"]'));
       const shareButtons = elements.filter(el => el.textContent && el.textContent.trim() === 'Share');
@@ -275,27 +262,21 @@ async function postToInstagram(page, filePath, caption) {
   });
 
   await page.waitForTimeout(25000); 
-  console.log(`[✅] Instagram post shared!`);
 }
 
 async function postToTikTok(page, filePath, caption) {
-  console.log(`[+] Opening TikTok upload page...`);
   await page.goto('https://www.tiktok.com/creator-center/upload', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(5000);
-
   if (page.url().includes('login')) throw new Error('TikTok cookies expired.');
-
+  
   await page.evaluate(() => {
     document.querySelectorAll('tiktok-cookie-banner').forEach(b => b.remove());
-  }).catch(() => {});
-
-  await page.evaluate(() => {
     document.querySelectorAll('input[type="file"]').forEach(el => {
       el.style.display = 'block';
       el.style.visibility = 'visible';
       el.style.opacity = '1';
     });
-  });
+  }).catch(() => {});
 
   const fileInput = page.locator('input[type="file"]').first();
   await fileInput.setInputFiles(filePath);
@@ -317,24 +298,16 @@ async function postToTikTok(page, filePath, caption) {
       await captionBox.waitFor({ state: 'visible', timeout: 10000 });
       await captionBox.click({ force: true });
       await page.waitForTimeout(1000);
-      
       await page.keyboard.press('Control+A');
       await page.keyboard.press('Backspace');
-      
       await page.evaluate((text) => {
           const dataTransfer = new DataTransfer();
           dataTransfer.setData('text/plain', text);
-          const event = new ClipboardEvent('paste', {
-              clipboardData: dataTransfer,
-              bubbles: true,
-              cancelable: true
-          });
+          const event = new ClipboardEvent('paste', { clipboardData: dataTransfer, bubbles: true, cancelable: true });
           document.querySelector('.public-DraftEditor-content').dispatchEvent(event);
       }, caption);
-      
       await page.waitForTimeout(2000);
       await page.keyboard.type(' ', { delay: 100 }); 
-
   } catch (e) {
       await page.mouse.click(800, 350); 
       await page.keyboard.press('Control+A');
@@ -351,28 +324,20 @@ async function postToTikTok(page, filePath, caption) {
         const postBtn = btns.find(b => b.textContent && b.textContent.trim() === 'Post');
         if (postBtn && !postBtn.disabled) postBtn.click();
     }).catch(() => {});
-
     await page.locator('button[data-e2e="post_video_button"]').click({ force: true }).catch(() => {});
     await page.locator('button:has-text("Post")').last().click({ force: true }).catch(() => {});
     await page.waitForTimeout(3000);
   }
-  
   await page.waitForTimeout(45000); 
-  console.log(`[✅] TikTok post process complete!`);
 }
 
 async function postToThreads(page, filePath, caption) {
   await page.goto('https://www.threads.net/', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(6000);
-
   if (page.url().includes('login')) throw new Error('Threads cookies expired.');
 
   try {
-      const composeSelectors = [
-          'svg[aria-label="Create"]',
-          'svg[aria-label="Write"]',
-          'div:has-text("Start a thread...")'
-      ];
+      const composeSelectors = ['svg[aria-label="Create"]', 'svg[aria-label="Write"]', 'div:has-text("Start a thread...")'];
       for (const sel of composeSelectors) {
           const el = page.locator(sel).last(); 
           if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -383,13 +348,10 @@ async function postToThreads(page, filePath, caption) {
   } catch (e) {}
 
   await page.waitForTimeout(4000);
-
   try {
       await page.evaluate(() => {
           document.querySelectorAll('input[type="file"]').forEach(el => {
-              el.style.display = 'block';
-              el.style.visibility = 'visible';
-              el.style.opacity = '1';
+              el.style.display = 'block'; el.style.visibility = 'visible'; el.style.opacity = '1';
           });
       });
       const fileInput = page.locator('input[type="file"]').first();
@@ -397,7 +359,6 @@ async function postToThreads(page, filePath, caption) {
   } catch (e) {}
 
   await page.waitForTimeout(6000);
-
   let threadsCaption = caption.length > 490 ? caption.substring(0, 490) + '...' : caption;
 
   try {
@@ -415,7 +376,6 @@ async function postToThreads(page, filePath, caption) {
   }
 
   await page.waitForTimeout(2000);
-
   for (let i = 0; i < 4; i++) {
       await page.evaluate(() => {
           const allElements = Array.from(document.querySelectorAll('*'));
@@ -433,15 +393,12 @@ async function postToThreads(page, filePath, caption) {
 async function postToX(page, filePath, caption) {
   await page.goto('https://x.com/compose/tweet', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(5000);
-
   if (page.url().includes('login')) throw new Error('X cookies expired.');
 
   try {
       await page.evaluate(() => {
           document.querySelectorAll('input[type="file"]').forEach(el => {
-              el.style.display = 'block';
-              el.style.visibility = 'visible';
-              el.style.opacity = '1';
+              el.style.display = 'block'; el.style.visibility = 'visible'; el.style.opacity = '1';
           });
       });
       const fileInput = page.locator('input[type="file"]').first();
@@ -449,7 +406,6 @@ async function postToX(page, filePath, caption) {
   } catch (e) {}
 
   await page.waitForTimeout(4000);
-
   let xCaption = caption.length > 270 ? caption.substring(0, 270) + '...' : caption;
 
   try {
@@ -467,7 +423,6 @@ async function postToX(page, filePath, caption) {
   }
 
   await page.waitForTimeout(2000);
-
   for (let i = 0; i < 4; i++) {
       await page.keyboard.press('Control+Enter');
       await page.evaluate(() => {
