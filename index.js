@@ -1,4 +1,7 @@
 require('dotenv').config();
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first'); // Forces IPv4 to destroy the Railway 'fetch failed' bug
+
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const { chromium } = require('playwright');
